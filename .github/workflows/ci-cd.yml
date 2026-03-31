@@ -206,19 +206,34 @@ jobs:
     # Fourth job: build and push the production image after all tests pass.
     needs: selenium-test
     runs-on: ubuntu-latest
-    if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
 
     steps:
       # Pull the source code for the Docker build context.
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Detect whether Docker Hub credentials are configured for this repository.
+      - name: Check Docker secrets
+        id: docker-secrets
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Docker secrets are missing. Skipping docker-build job."
+          fi
+
       # Enable modern Docker build features for faster, cleaner builds.
       - name: Set up Docker Buildx
+        if: ${{ steps.docker-secrets.outputs.available == 'true' }}
         uses: docker/setup-buildx-action@v3
 
       # Log in to Docker Hub using repository secrets.
       - name: Log in to Docker Hub
+        if: ${{ steps.docker-secrets.outputs.available == 'true' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -226,6 +241,7 @@ jobs:
 
       # Create consistent image tags for latest and the current commit SHA.
       - name: Extract Docker metadata
+        if: ${{ steps.docker-secrets.outputs.available == 'true' }}
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -236,6 +252,7 @@ jobs:
 
       # Build the image and push it to Docker Hub.
       - name: Build and push Docker image
+        if: ${{ steps.docker-secrets.outputs.available == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -248,27 +265,47 @@ jobs:
     # Final job: deploy only after the Docker image is published.
     needs: docker-build
     runs-on: ubuntu-latest
-    if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' && secrets.SSH_PRIVATE_KEY != '' && secrets.SERVER_IP != '' && secrets.SERVER_USER != '' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
 
     steps:
       # Pull the repository so the deployment script is available on the runner.
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Detect whether all deployment secrets are available before attempting SSH.
+      - name: Check deployment secrets
+        id: deploy-secrets
+        if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ] && [ -n "$SSH_PRIVATE_KEY" ] && [ -n "$SERVER_IP" ] && [ -n "$SERVER_USER" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Deployment secrets are missing. Skipping deploy job."
+          fi
+
       # Load the SSH private key into the runner so it can reach the server.
       - name: Set up SSH key
+        if: ${{ steps.deploy-secrets.outputs.available == 'true' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       # Add the server to known_hosts to avoid interactive SSH prompts.
       - name: Add server to known hosts
+        if: ${{ steps.deploy-secrets.outputs.available == 'true' }}
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
       # Copy deployment variables into the SSH session and restart the container.
       - name: Deploy latest Docker image to server
+        if: ${{ steps.deploy-secrets.outputs.available == 'true' }}
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
