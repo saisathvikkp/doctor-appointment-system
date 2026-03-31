@@ -206,6 +206,7 @@ jobs:
     # Fourth job: build and push the production image after all tests pass.
     needs: selenium-test
     runs-on: ubuntu-latest
+    if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
 
     steps:
       # Pull the source code for the Docker build context.
@@ -247,7 +248,7 @@ jobs:
     # Final job: deploy only after the Docker image is published.
     needs: docker-build
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+    if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' && secrets.SSH_PRIVATE_KEY != '' && secrets.SERVER_IP != '' && secrets.SERVER_USER != '' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
 
     steps:
       # Pull the repository so the deployment script is available on the runner.
