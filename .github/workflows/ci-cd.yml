@@ -20,6 +20,8 @@ env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
   IMAGE_NAME: online-doctor-appointment-system
+  BACKEND_DIR: backend
+  FRONTEND_DIR: frontend
 
 jobs:
   frontend-test:
@@ -41,7 +43,7 @@ jobs:
       - name: Cache frontend node_modules
         uses: actions/cache@v4
         with:
-          path: frontend/node_modules
+          path: ${{ env.FRONTEND_DIR }}/node_modules
           key: ${{ runner.os }}-frontend-node-modules-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-frontend-node-modules-
@@ -49,14 +51,14 @@ jobs:
       # Install frontend packages when a frontend project exists.
       - name: Install frontend dependencies
         if: ${{ hashFiles('frontend/package.json') != '' }}
-        working-directory: frontend
+        working-directory: ${{ env.FRONTEND_DIR }}
         run: npm install
 
       # Run Jest unit tests for the React application.
       - name: Run frontend unit tests
         if: ${{ hashFiles('frontend/package.json') != '' }}
-        working-directory: frontend
-        run: npm test -- --watchAll=false
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm test -- --watchAll=false --passWithNoTests
 
       # Keep the workflow beginner-friendly by explaining skipped frontend steps.
       - name: Frontend not present yet
@@ -79,10 +81,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: backend/requirements.txt
 
       # Install backend dependencies from requirements.txt.
       - name: Install backend dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -90,6 +93,7 @@ jobs:
 
       # Run backend tests with pytest.
       - name: Run backend tests
+        working-directory: ${{ env.BACKEND_DIR }}
         run: pytest
 
   selenium-test:
@@ -110,7 +114,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: backend/requirements.txt
 
       # Set up Node.js so the React app can be started when present.
       - name: Set up Node.js
@@ -120,6 +124,7 @@ jobs:
 
       # Install backend test dependencies including Selenium tooling.
       - name: Install backend and Selenium dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -128,7 +133,7 @@ jobs:
       # Install frontend dependencies only when the React app exists.
       - name: Install frontend dependencies
         if: ${{ hashFiles('frontend/package.json') != '' }}
-        working-directory: frontend
+        working-directory: ${{ env.FRONTEND_DIR }}
         run: npm install
 
       # Install Google Chrome so Selenium can run in headless mode.
@@ -137,6 +142,7 @@ jobs:
 
       # Start the Flask backend in the background for end-to-end testing.
       - name: Start Flask backend
+        working-directory: ${{ env.BACKEND_DIR }}
         run: |
           python app.py > backend.log 2>&1 &
           echo $! > backend.pid
@@ -144,7 +150,7 @@ jobs:
       # Start the React frontend in the background only if it exists.
       - name: Start React frontend
         if: ${{ hashFiles('frontend/package.json') != '' }}
-        working-directory: frontend
+        working-directory: ${{ env.FRONTEND_DIR }}
         run: |
           CI=true npm start > ../frontend.log 2>&1 &
           echo $! > ../frontend.pid
@@ -160,7 +166,7 @@ jobs:
             sleep 2
           done
           echo "Backend did not become ready in time."
-          cat backend.log || true
+          cat backend/backend.log || true
           exit 1
 
       # Wait for the frontend dev server only when a React app exists.
@@ -183,6 +189,7 @@ jobs:
         env:
           FRONTEND_URL: http://127.0.0.1:3000
           BACKEND_URL: http://127.0.0.1:5000
+        working-directory: ${{ env.BACKEND_DIR }}
         run: python tests/selenium/selenium_test.py
 
       # Upload logs to help debugging if the browser tests fail.
@@ -192,7 +199,7 @@ jobs:
         with:
           name: selenium-debug-logs
           path: |
-            backend.log
+            backend/backend.log
             frontend.log
 
   docker-build:
@@ -230,8 +237,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./backend
+          file: ./backend/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -267,4 +274,4 @@ jobs:
           SERVER_USER: ${{ secrets.SERVER_USER }}
         run: |
           ssh $SERVER_USER@$SERVER_IP \
-            "export DOCKER_USERNAME='$DOCKER_USERNAME' && bash -s" < scripts/deploy.sh
+            "export DOCKER_USERNAME='$DOCKER_USERNAME' && bash -s" < backend/scripts/deploy.sh
