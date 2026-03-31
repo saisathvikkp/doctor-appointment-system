@@ -94,7 +94,7 @@ jobs:
       # Run backend tests with pytest.
       - name: Run backend tests
         working-directory: ${{ env.BACKEND_DIR }}
-        run: pytest
+        run: pytest --ignore=tests/selenium
 
   selenium-test:
     # Third job: waits for both frontend-test and backend-test.
