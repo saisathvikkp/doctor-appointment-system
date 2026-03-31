@@ -1,45 +1,35 @@
-#!/usr/bin/env python
+import importlib
 import sys
-sys.path.insert(0, '.')
 
-print("=" * 60)
-print("DIAGNOSTIC TEST FOR APP")
-print("=" * 60)
+import pytest
 
-try:
-    from app import app
-    print("\n✓ Successfully imported app")
-except Exception as e:
-    print(f"\n✗ FAILED to import app: {e}")
-    sys.exit(1)
+sys.path.insert(0, ".")
 
-print(f"\nApp routes registered: {len(list(app.url_map.iter_rules()))}")
-print("\nAll routes:")
-for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
-    print(f"  {rule.rule:30} -> {rule.endpoint}")
+import app as app_module
 
-print("\n" + "=" * 60)
-print("TESTING ROUTES WITH TEST CLIENT")
-print("=" * 60)
 
-client = app.test_client()
+@pytest.fixture()
+def client(tmp_path):
+    test_db = tmp_path / "test_app.db"
 
-# Test home
-print("\n1. Testing GET /")
-resp = client.get('/')
-print(f"   Status: {resp.status_code}")
-print(f"   Response: {resp.data.decode()}")
+    module = importlib.reload(app_module)
+    module.DATABASE = str(test_db)
+    module.init_db()
+    module.app.config["TESTING"] = True
 
-# Test register
-print("\n2. Testing POST /register")
-resp = client.post('/register', json={"name": "Test", "email": "test@test.com", "password": "test123"})
-print(f"   Status: {resp.status_code}")
-print(f"   Response: {resp.data.decode()}")
+    with module.app.test_client() as test_client:
+        yield test_client
 
-# Test test route
-print("\n3. Testing GET /test")
-resp = client.get('/test')
-print(f"   Status: {resp.status_code}")
-print(f"   Response: {resp.data.decode()}")
 
-print("\n" + "=" * 60)
+def test_root_route_returns_service_message(client):
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Doctor Appointment" in response.data.decode()
+
+
+def test_health_route_returns_backend_status(client):
+    response = client.get("/test")
+
+    assert response.status_code == 200
+    assert response.get_json()["message"] == "Backend is working"
