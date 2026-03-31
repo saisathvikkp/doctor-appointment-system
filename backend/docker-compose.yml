@@ -1,0 +1,14 @@
+services:
+  backend:
+    build: .
+    container_name: doctor-appointment-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "5000"
+    volumes:
+      - ./doctor_appointment.db:/app/doctor_appointment.db
+    stdin_open: true
+    tty: true

@@ -1,0 +1,263 @@
+name: Online Doctor Appointment System CI/CD
+
+on:
+  # Run the pipeline whenever code is pushed to the main branch.
+  push:
+    branches:
+      - main
+
+  # Run validation for incoming pull requests as well.
+  pull_request:
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  IMAGE_NAME: online-doctor-appointment-system
+
+jobs:
+  frontend-test:
+    # First job in the chain: validate the React frontend.
+    runs-on: ubuntu-latest
+
+    steps:
+      # Download the repository contents into the runner.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install Node.js for React and Jest commands.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Cache the frontend node_modules folder to speed up repeated runs.
+      - name: Cache frontend node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-frontend-node-modules-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-node-modules-
+
+      # Install frontend packages when a frontend project exists.
+      - name: Install frontend dependencies
+        if: ${{ hashFiles('frontend/package.json') != '' }}
+        working-directory: frontend
+        run: npm install
+
+      # Run Jest unit tests for the React application.
+      - name: Run frontend unit tests
+        if: ${{ hashFiles('frontend/package.json') != '' }}
+        working-directory: frontend
+        run: npm test -- --watchAll=false
+
+      # Keep the workflow beginner-friendly by explaining skipped frontend steps.
+      - name: Frontend not present yet
+        if: ${{ hashFiles('frontend/package.json') == '' }}
+        run: echo "No frontend/package.json found. Add your React app under frontend/ to enable frontend tests."
+
+  backend-test:
+    # Second job: only starts after frontend-test succeeds.
+    needs: frontend-test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Pull the latest repository code into the runner.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install Python for Flask and pytest.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Install backend dependencies from requirements.txt.
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      # Run backend tests with pytest.
+      - name: Run backend tests
+        run: pytest
+
+  selenium-test:
+    # Third job: waits for both frontend-test and backend-test.
+    needs:
+      - frontend-test
+      - backend-test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Check out the application code.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Python for Flask, Selenium, and the sample test script.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Set up Node.js so the React app can be started when present.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Install backend test dependencies including Selenium tooling.
+      - name: Install backend and Selenium dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install selenium webdriver-manager pytest requests
+
+      # Install frontend dependencies only when the React app exists.
+      - name: Install frontend dependencies
+        if: ${{ hashFiles('frontend/package.json') != '' }}
+        working-directory: frontend
+        run: npm install
+
+      # Install Google Chrome so Selenium can run in headless mode.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      # Start the Flask backend in the background for end-to-end testing.
+      - name: Start Flask backend
+        run: |
+          python app.py > backend.log 2>&1 &
+          echo $! > backend.pid
+
+      # Start the React frontend in the background only if it exists.
+      - name: Start React frontend
+        if: ${{ hashFiles('frontend/package.json') != '' }}
+        working-directory: frontend
+        run: |
+          CI=true npm start > ../frontend.log 2>&1 &
+          echo $! > ../frontend.pid
+
+      # Wait until the Flask API responds before continuing.
+      - name: Wait for backend service
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5000/test > /dev/null; then
+              echo "Backend is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become ready in time."
+          cat backend.log || true
+          exit 1
+
+      # Wait for the frontend dev server only when a React app exists.
+      - name: Wait for frontend service
+        if: ${{ hashFiles('frontend/package.json') != '' }}
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000 > /dev/null; then
+              echo "Frontend is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Frontend did not become ready in time."
+          cat frontend.log || true
+          exit 1
+
+      # Run the sample Selenium test with headless Chrome.
+      - name: Run Selenium tests
+        env:
+          FRONTEND_URL: http://127.0.0.1:3000
+          BACKEND_URL: http://127.0.0.1:5000
+        run: python tests/selenium/selenium_test.py
+
+      # Upload logs to help debugging if the browser tests fail.
+      - name: Upload Selenium logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selenium-debug-logs
+          path: |
+            backend.log
+            frontend.log
+
+  docker-build:
+    # Fourth job: build and push the production image after all tests pass.
+    needs: selenium-test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Pull the source code for the Docker build context.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Enable modern Docker build features for faster, cleaner builds.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Log in to Docker Hub using repository secrets.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Create consistent image tags for latest and the current commit SHA.
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      # Build the image and push it to Docker Hub.
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    # Final job: deploy only after the Docker image is published.
+    needs: docker-build
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+    steps:
+      # Pull the repository so the deployment script is available on the runner.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Load the SSH private key into the runner so it can reach the server.
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # Add the server to known_hosts to avoid interactive SSH prompts.
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      # Copy deployment variables into the SSH session and restart the container.
+      - name: Deploy latest Docker image to server
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          ssh $SERVER_USER@$SERVER_IP \
+            "export DOCKER_USERNAME='$DOCKER_USERNAME' && bash -s" < scripts/deploy.sh

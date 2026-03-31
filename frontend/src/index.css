@@ -1,0 +1,26 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #f7fbfd;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+table th,
+table td {
+  border: 1px solid #e4edf2;
+}
+
+table th {
+  background: #eef7fb;
+  color: #173247;
+}
